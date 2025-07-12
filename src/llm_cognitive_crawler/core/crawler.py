@@ -13,6 +13,7 @@ from .data_models import (
     CognitiveDomain
 )
 from .bayesian_engine import BayesianEngine
+from .dynamic_hypothesis_generator import DynamicHypothesisGenerator
 from ..models.base import LLMProvider
 
 
@@ -26,6 +27,11 @@ class LLMCognitiveCrawler:
         self.responses: Dict[str, LLMResponse] = {}
         self.config = kwargs
         self.logger = logging.getLogger(__name__)
+        
+        # Dynamic hypothesis generation (Phase 1 extension)
+        self.enable_dynamic_hypotheses = kwargs.get('enable_dynamic_hypotheses', True)
+        self.surprise_threshold = kwargs.get('surprise_threshold', 2.0)
+        self.dynamic_generator = DynamicHypothesisGenerator(llm_provider) if self.enable_dynamic_hypotheses else None
         
         # Set up logging
         if not self.logger.handlers:
@@ -68,6 +74,10 @@ class LLMCognitiveCrawler:
         try:
             response = await self.llm_provider.query(scenario, **kwargs)
             self.responses[response.response_id] = response
+            
+            # Check for surprises before updating beliefs (Dynamic Extension)
+            if self.enable_dynamic_hypotheses and self.dynamic_generator:
+                await self._handle_surprise_detection(scenario, response)
             
             # Update Bayesian beliefs
             self.bayesian_engine.update_beliefs(scenario, response)
@@ -202,6 +212,76 @@ class LLMCognitiveCrawler:
             "convergence_metrics": self.bayesian_engine.get_convergence_metrics()
         }
     
+    async def _handle_surprise_detection(self, scenario: ProbingScenario, response: LLMResponse) -> None:
+        """Handle surprise detection and dynamic hypothesis generation (Phase 1 Extension)."""
+        try:
+            # Check if response is surprising
+            if self.bayesian_engine.is_surprising(scenario, response, self.surprise_threshold):
+                self.logger.info(f"Surprising response detected for scenario {scenario.scenario_id}")
+                
+                # Get surprise context for hypothesis generation
+                surprise_context = self.bayesian_engine.get_surprise_context(scenario, response)
+                
+                # Get current top hypotheses for context
+                existing_hypotheses = [hyp for hyp, _ in self.bayesian_engine.get_hypothesis_ranking()]
+                
+                # Generate new hypothesis
+                new_hypothesis = await self.dynamic_generator.generate_hypothesis(
+                    scenario, response, surprise_context, existing_hypotheses
+                )
+                
+                if new_hypothesis:
+                    # Validate hypothesis against historical data
+                    historical_data = self._get_historical_data_for_validation()
+                    validation_results = await self.dynamic_generator.validate_hypothesis(
+                        new_hypothesis, historical_data
+                    )
+                    
+                    # Add hypothesis if validation passes threshold
+                    validation_threshold = 0.4  # Configurable threshold
+                    if validation_results.get("validation_score", 0) > validation_threshold:
+                        self.add_hypothesis(new_hypothesis)
+                        self.logger.info(f"Added validated dynamic hypothesis: {new_hypothesis.name}")
+                    else:
+                        self.logger.info(f"Dynamic hypothesis rejected due to low validation score: {validation_results.get('validation_score', 0):.3f}")
+                
+        except Exception as e:
+            self.logger.error(f"Error in surprise detection: {e}")
+    
+    def _get_historical_data_for_validation(self) -> List[Tuple[ProbingScenario, LLMResponse]]:
+        """Get historical scenario-response pairs for hypothesis validation."""
+        historical_data = []
+        for response in self.responses.values():
+            if response.scenario_id in self.scenarios:
+                scenario = self.scenarios[response.scenario_id]
+                historical_data.append((scenario, response))
+        return historical_data
+    
+    def get_dynamic_generation_stats(self) -> Dict[str, Any]:
+        """Get statistics about dynamic hypothesis generation activity."""
+        if not self.enable_dynamic_hypotheses or not self.dynamic_generator:
+            return {"dynamic_generation_enabled": False}
+        
+        stats = self.dynamic_generator.get_generation_statistics()
+        stats["dynamic_generation_enabled"] = True
+        stats["surprise_threshold"] = self.surprise_threshold
+        return stats
+    
+    def set_surprise_threshold(self, threshold: float) -> None:
+        """Set the surprise threshold for dynamic hypothesis generation."""
+        if not 0.5 <= threshold <= 10.0:
+            raise ValueError("Surprise threshold must be between 0.5 and 10.0")
+        
+        self.surprise_threshold = threshold
+        self.logger.info(f"Updated surprise threshold to {threshold}")
+    
+    def get_generated_hypotheses(self) -> List[CognitiveHypothesis]:
+        """Get all dynamically generated hypotheses."""
+        if not self.dynamic_generator:
+            return []
+        
+        return list(self.dynamic_generator.generated_hypotheses.values())
+
     async def close(self) -> None:
         """Clean up resources."""
         if hasattr(self.llm_provider, 'close'):

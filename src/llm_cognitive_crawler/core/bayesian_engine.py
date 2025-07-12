@@ -150,3 +150,80 @@ class BayesianEngine:
         
         self.evidence_log.clear()
         self.logger.info("Reset all beliefs to priors")
+    
+    def calculate_surprise(self, scenario: ProbingScenario, response: LLMResponse) -> float:
+        """Calculate surprise level based on how unexpected the response is given current beliefs.
+        
+        Surprise is computed as the negative log probability of the observed response
+        under the current model ensemble.
+        
+        Returns:
+            float: Surprise score (0 = expected, higher = more surprising)
+        """
+        if not self.hypotheses:
+            return 0.0
+        
+        # Calculate ensemble likelihood: weighted average of individual likelihoods
+        ensemble_likelihood = 0.0
+        total_weight = sum(self.posterior_probabilities.values())
+        
+        if total_weight == 0:
+            return 0.0
+        
+        for hypothesis_id, hypothesis in self.hypotheses.items():
+            likelihood = self.calculate_likelihood(hypothesis, scenario, response)
+            weight = self.posterior_probabilities[hypothesis_id] / total_weight
+            ensemble_likelihood += likelihood * weight
+        
+        # Surprise is negative log likelihood (higher = more surprising)
+        if ensemble_likelihood > 0:
+            surprise = -np.log(ensemble_likelihood)
+        else:
+            surprise = 10.0  # High surprise for zero likelihood
+        
+        return max(0.0, surprise)
+    
+    def is_surprising(self, scenario: ProbingScenario, response: LLMResponse, 
+                     threshold: float = 2.0) -> bool:
+        """Determine if a response is surprising enough to warrant new hypothesis generation.
+        
+        Args:
+            scenario: The probing scenario
+            response: The LLM response
+            threshold: Surprise threshold (default 2.0 = fairly surprising)
+            
+        Returns:
+            bool: True if response is surprising
+        """
+        surprise_score = self.calculate_surprise(scenario, response)
+        return surprise_score > threshold
+    
+    def get_surprise_context(self, scenario: ProbingScenario, response: LLMResponse) -> Dict[str, Any]:
+        """Get contextual information about why a response was surprising.
+        
+        Returns:
+            Dict containing surprise analysis details
+        """
+        surprise_score = self.calculate_surprise(scenario, response)
+        
+        # Calculate individual hypothesis likelihoods for debugging
+        hypothesis_likelihoods = {}
+        for hypothesis_id, hypothesis in self.hypotheses.items():
+            likelihood = self.calculate_likelihood(hypothesis, scenario, response)
+            posterior = self.posterior_probabilities[hypothesis_id]
+            hypothesis_likelihoods[hypothesis.name] = {
+                "likelihood": likelihood,
+                "posterior": posterior,
+                "weighted_likelihood": likelihood * posterior
+            }
+        
+        return {
+            "surprise_score": surprise_score,
+            "is_surprising": surprise_score > 2.0,
+            "scenario_domain": scenario.domain.value,
+            "scenario_type": scenario.response_type.value,
+            "response_summary": response.raw_response[:100] + "..." if len(response.raw_response) > 100 else response.raw_response,
+            "current_entropy": self.calculate_entropy(),
+            "hypothesis_analysis": hypothesis_likelihoods,
+            "most_likely_hypothesis": self.get_most_likely_hypothesis().name if self.get_most_likely_hypothesis() else None
+        }

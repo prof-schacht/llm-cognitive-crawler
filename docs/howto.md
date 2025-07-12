@@ -205,6 +205,116 @@ async def full_analysis():
 profile = asyncio.run(full_analysis())
 ```
 
+## Dynamic Hypothesis Generation (NEW)
+
+The Dynamic Cognitive Crawler extension automatically generates new hypotheses when LLM behavior doesn't fit existing models.
+
+### Basic Dynamic Analysis
+```python
+async def dynamic_analysis():
+    # Enable dynamic hypothesis generation
+    crawler = LLMCognitiveCrawler(
+        provider,
+        enable_dynamic_hypotheses=True,
+        surprise_threshold=2.0  # Sensitivity for surprise detection
+    )
+    
+    # Add initial scenarios and hypotheses
+    crawler.add_scenarios(scenarios)
+    crawler.add_hypotheses(hypotheses)
+    
+    # Run analysis - new hypotheses will be generated automatically
+    results = await crawler.run_comprehensive_analysis()
+    
+    # Check for dynamically generated hypotheses
+    generated_hypotheses = crawler.get_generated_hypotheses()
+    print(f"Generated {len(generated_hypotheses)} new hypotheses")
+    
+    for hypothesis in generated_hypotheses:
+        print(f"- {hypothesis.name}: {hypothesis.description[:100]}...")
+    
+    # Get generation statistics
+    stats = crawler.get_dynamic_generation_stats()
+    print(f"Total hypotheses generated: {stats['total_generated']}")
+    print(f"Average surprise score: {stats['average_surprise_score']:.2f}")
+    
+    return results
+
+profile = asyncio.run(dynamic_analysis())
+```
+
+### Configuration Options
+```python
+# Configure dynamic generation behavior
+crawler = LLMCognitiveCrawler(
+    provider,
+    enable_dynamic_hypotheses=True,      # Enable/disable dynamic generation
+    surprise_threshold=2.5,              # Higher = less sensitive (1.0-5.0)
+)
+
+# Adjust threshold during analysis
+crawler.set_surprise_threshold(1.5)  # Make more sensitive to surprises
+```
+
+### Understanding Surprise Detection
+The system calculates surprise based on how well current hypotheses explain observed behavior:
+
+```python
+# Get surprise information for a specific response
+surprise_context = crawler.bayesian_engine.get_surprise_context(scenario, response)
+
+print(f"Surprise score: {surprise_context['surprise_score']:.2f}")
+print(f"Is surprising: {surprise_context['is_surprising']}")
+print(f"Current entropy: {surprise_context['current_entropy']:.2f}")
+
+# Analysis of why it was surprising
+for hyp_name, analysis in surprise_context['hypothesis_analysis'].items():
+    print(f"{hyp_name}: likelihood={analysis['likelihood']:.3f}")
+```
+
+### Generated Hypothesis Structure
+Dynamic hypotheses include additional metadata:
+
+```python
+for hypothesis in crawler.get_generated_hypotheses():
+    print(f"Name: {hypothesis.name}")
+    print(f"Description: {hypothesis.description}")
+    print(f"Generated from scenario: {hypothesis.metadata['generation_scenario']}")
+    print(f"Generation confidence: {hypothesis.metadata['generation_confidence']}")
+    print(f"Validation score: {hypothesis.metadata.get('validation_score', 'N/A')}")
+    print("Cognitive attributes:")
+    for attr, value in hypothesis.cognitive_attributes.items():
+        print(f"  {attr}: {value:.2f}")
+```
+
+### Monitoring Dynamic Generation
+Track the dynamic generation process:
+
+```python
+# Before analysis
+initial_hypothesis_count = len(crawler.bayesian_engine.hypotheses)
+
+# Run analysis
+results = await crawler.run_comprehensive_analysis()
+
+# After analysis  
+final_hypothesis_count = len(crawler.bayesian_engine.hypotheses)
+generated_count = final_hypothesis_count - initial_hypothesis_count
+
+print(f"Started with {initial_hypothesis_count} hypotheses")
+print(f"Generated {generated_count} new hypotheses")
+
+# Get detailed statistics
+stats = crawler.get_dynamic_generation_stats()
+if stats['dynamic_generation_enabled']:
+    print(f"Surprise threshold: {stats['surprise_threshold']}")
+    print(f"Average generation confidence: {stats.get('average_confidence', 0):.2f}")
+    
+    # Recent generations
+    for gen in stats.get('recent_generations', [])[-3:]:
+        print(f"Recent: {gen['hypothesis_name']} (surprise: {gen['surprise_score']:.2f})")
+```
+
 ## Advanced Usage
 
 ### Custom Response Parsing
